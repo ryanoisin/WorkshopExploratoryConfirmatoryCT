@@ -1,0 +1,239 @@
+---
+title: "N=1 Symposium Workshop Part II: Exploratory Continuous-Time Modeling"
+author: "Oisín Ryan"
+date: "April 2023"
+params:
+  answers: true
+mainfont: Arial
+fontsize: 12pt
+urlcolor: blue
+output: 
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float: true
+    df_print: paged
+    theme: paper
+  pdf_document:
+    toc: true
+    toc_depth: 5
+    latex_engine: xelatex
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.pos = 'H', warning = FALSE, message = FALSE)
+```
+
+# Introduction
+
+In this practical, you will get a taste of performing exploratory continuous-time modeling using the `expct` package. This package allows users to estimate auto- and cross-correlation functions from unequally spaced time series data. Please see the `setup` folder for more instructions on installing necessary packages
+
+```{r, warnings = F, message = F}
+# devtools::install_github("ryanoisin/expct")
+library(expct)
+```
+
+
+The package takes a longitudinal dataset as the input. Relying on a simple data-stacking approach and Generalized Additive Mixed Models (GAMMs), it allows researchers to:
+
+  - Estimate auto- and cross-correlations from irregularly spaced time series
+  - Visualze how auto- and cross-correlations vary as a smooth function of time
+  - Quantify uncertainty about our auto- and cross-correlation estimates through the construction of credible intervals (CIs)
+
+This workshop and the associated R package are based on work by Ois\'{i}n Ryan, Kejin Wu and Nick Jacobson. The approach is outlined in Ryan, Wu and Jacobson (in preperation) Exploratory Continuous-Time Modeling *expct*: Extracting Dynamic Features from Irregularly Spaced Time Series. For questions and comments please contact [**o.ryan\@uu.nl**](mailto:o.ryan@uu.nl){.email}.
+
+
+# Exercise 1
+
+## Loading and Exploring Data
+In this first exercise we will make use of a simulated dataset. Let's read in the data
+
+```{r}
+data <- readRDS("data/data_expct_example.RDS")
+head(data)
+```
+
+The dataset consists of time-series data from a single-subject. We observe two variables, here named $Y1$ and $Y2$. We also record time stamp information in the **time** column. This column represents, for each observation, the total time that has elapsed since the beginning of the study (i.e. since the very first observation moment), in some unit of time (e.g. hours). This is the format which is required by the `expct` package.
+
+As we did in the previous practical, it's good practice to start by exploring to what degree the measurements are unequally spaced in time. To do this, I first calculate the *time-lag* between each pair of observations. So, for example, from about we can see that the second observation takes place approximately 3.34 hours since the first observation. The second observation takes place 5.88 hours since the *first* observation, so the time-lag from the second to the third observation is $5.88 - 3.34 = 2.54$ hours. Below I compute this time-lag for each observation, and visualize this with a histogram
+
+```{r}
+# time intervals
+dt <- data$time[-1] - data$time[-nrow(data)]
+
+hist(dt, main = "Time-Interval (hrs) Between Measurements", xlab = "hours")
+```
+
+As we can see, there is a large degree of heterogeneity in how observations are spaced in time. The distribution above looks *bi-modal*; in other words it looks like observations are either spaced roughly 2.5 hours apart or roughly 5 hours apart, with quite a lot of variation.
+
+The unequally spaced nature of the data means that it is necessary to use the `expct` package to estimate auto- and cross-correlations
+
+## Estimating Auto- and Cross-Correlations with expct
+
+Since the data is already in the format required by `expct` we can now estimate auto- and cross- correlations. Here we will walk you through some of the main commands and their meaning. The main commands to pay attention to are as follows:
+
+
+```{r}
+# A vector defining at what values of time do we wish to estimate the ACF and CCF?
+Tpred <- seq(1,30,1)
+```
+
+The `Tpred` command defines for what values of the time-interval we want estimates of the auto- and cross-correlations. For instance, let's say we only want estimates of the auto-correlation at a time-lag of 2.5 hours and 5 hours. In that case, we would specify `Tpred = c(2.5, 5)`. However, it is likely interesting to investigate the auto- and cross-correlations across a relatively large range of time-lags. The maximum time-lag you can investigate is of course constrained by the length of the time-series dataset. For instance, in the simulated dataset we provide, we have observations spread across a total of 52 days, spaced as shown in the histogram above. In this instance, we choose to to investigate auto- and cross- correlations ranging from time lags of 1 to 30 hours
+
+```{r}
+# How should confidence intervals be computed?
+output_type = "SCI"
+```
+
+The second option defines how confidence intervals should be computed. Through simulation we have found that the default CI estimation of the underlying GAM function yields confidence intervals that are too narrow. Two alternative methods are provided, both of which correct for the fact that estimates of the auto- and cross-correlations at different time-lags are dependent on one another. Simultaneous Confidence Intervals can be computed by setting `output_type = "SCI"` (for an accesible introduction see [this helpful blog post](https://fromthebottomoftheheap.net/2016/12/15/simultaneous-interval-revisited/)). Alternatively, we can compute confidence intervals which make use of so-called "large-lag" error corrections based on the time-series literature, using the argument `output_type = "LLCI"`. Both methods appear to have reasonable performance on an aggregate level. The main difference on the user side is that `LLCI` type confidence intervals are typically quite narrow when the point estimate is near (i.e. crosses) zero and wider when the point estimate is far from zero. For now we will use the simultaneous confidence intervals. 
+
+The other additional arguments relate to options to pass to the GAM function, options for pre-processing (such as pre-detrending data, not generally recommended) or options for possible bootstrap estimation of confidence intervals. Here we can rely mainly on defaults. The main option of concern for the GAM function is `k`, the number of knots; in practice, the GAM function will itself select the appropriate number of knots in the background, so here users should only be concerned with picking a relatively large number. A good starting point is to choose `k` equal to the number of time-lags you're interested in, as defined by the `Tpred` option above.
+
+Otherwise, the user only needs to specify an input `dataset` and tell the function where to find the `time` column, the variables of interest (`outcome = c("Y1","Y2")`), and the `ID` column. If there is only a single subject the user should still supply an `ID` column, for instance `data$id = rep(1, nrow(data))`. 
+
+
+```{r}
+out <- expct(
+  dataset = data,
+  Time = "time",
+  outcome = c("Y1","Y2"),
+  ID = "id",
+  Tpred = seq(1,30,1),
+  output_type = "SCI",
+  standardized = F,
+  method = "bam",
+  k = 30,
+  time_trend = FALSE
+)
+
+```
+## Understanding the output
+
+
+```{r}
+par(mfrow = c(2,2))
+
+
+plot(out$est$Y1toY1, type = "b", ylab = "estimated autocorrelation", 
+     xlab = "time diff", main = "Autocorrelation Y1", col = "red", ylim = c(-1,1))
+lines(out$highCI$Y1toY1, lty = 2, col = "red")
+lines(out$lowCI$Y1toY1, lty = 2, col = "red")
+abline(h = 0, col = "grey")
+
+
+plot(out$est$Y2toY1, type = "b", ylab = "estimated correlation", xlab = "time diff",
+     main = "Cross Correlation Y2 -> Y1", col = "red", ylim = c(-1,1))
+lines(out$highCI$Y2toY1, lty = 2, col = "red")
+lines(out$lowCI$Y2toY1, lty = 2, col = "red")
+abline(h = 0, col = "grey")
+
+
+plot(out$est$Y1toY2, type = "b", ylab = "estimated correlation",
+     xlab = "time diff", main = "Cross Correlation Y1 -> Y2", col = "red",
+     ylim = c(-1,1))
+lines(out$highCI$Y1toY2, lty = 2, col = "red")
+lines(out$lowCI$Y1toY2, lty = 2, col = "red")
+abline(h = 0, col = "grey")
+
+plot(out$est$Y2toY2, type = "b", ylab = "estimated autocorrelation", 
+     xlab = "time diff", main = "Autocorrelation Y2", col = "red", ylim = c(-1,1))
+lines(out$highCI$Y2toY2, lty = 2, col = "red")
+lines(out$lowCI$Y2toY2, lty = 2, col = "red")
+abline(h = 0, col = "grey")
+```
+
+
+# Exercise 2: Empirical Data
+
+In this exercise you can get some practice with using the `expct` package with empirical data. Again we will use the single-subject time series data collected by Wichers \& Groot (2016) and published in the journal of open psychology data by Kossakowski et al (2017). You can download the data they used from OSF by following [this link](https://osf.io/j4fg8/). Some of the first steps of loading the data are given below
+
+```{r, eval = TRUE}
+# data available for download from https://osf.io/c6xt4/download #
+rawdata <- read.csv("data/ESMdata.csv",header=TRUE, stringsAsFactors = FALSE)
+
+# Extract time variable
+t1 <- as.POSIXct(paste(rawdata$date,rawdata$resptime_s),format="%d/%m/%y %H:%M:%S")
+# transform to "hours since the first measurement occassion"
+time <- as.numeric(difftime(t1,t1[1], units="hours"))
+
+# Make time-intervals between subsequent occassions
+dtime <- time[-1] - time[-length(time)]
+
+# Visualize the distribution of time-intervales between measuremnet occasions
+# here for a clearer visualization I cut out the most extremely high values
+dtime_quant <- dtime[dtime <= quantile(dtime, c(0.975))]
+
+hist(dtime_quant,
+     main = "TI Distribution (0 - 97.5 percentile)",
+     xlab = "Time-Interval", col = "#666666")
+abline(v=median(dtime),  col = "#E6AB02", lty = 2, lwd = 3)
+```
+
+
+Select whatever variable you find interesting to analyze. Here I chose the measures of self doubt and physical tiredness. You can choose any number of variables you like here. 
+
+```{r}
+data_esm <- rawdata[,c("se_selfdoub", "phy_tired")]
+
+# i choose to standardize the variable for interpretability and as a matter of standard practice
+# in principle this is not necessary, since correlations are estimated
+data_esm <- apply(data_esm,2,scale)
+
+# create ID variable
+id <- rep(1,nrow(data_esm))
+
+# Create long form dataset for ctsem, including the time vector we made earlier
+data_long <- cbind(id, time, data_esm)
+
+```
+
+Next I define what time intervals I am interested in investigating. In this dataset the total period of the study is quite long, approximately 239 days from first to last observation. For that reason I choose to investigate hour-to-hour correlations for a little longer than a week
+```{r}
+maxtime <- 24*8
+Tpred = seq(1, maxtime,1)
+```
+
+
+Next we simply estimate auto- and cross-correlations as we did in the previous exercise
+
+```{r, cache = T}
+outemp <- expct(
+  dataset = data_long,
+  Time = "time",
+  outcome = c("se_selfdoub","phy_tired"),
+  ID = "id",
+  Tpred =  seq(1, maxtime,1),
+  plot_show = F,
+  quantiles = c(.025, 0.975),
+  boot = FALSE,
+  output_type = "SCI", #changed here
+  standardized = F,
+  method = "bam",
+  k = 30,
+  pivot = "Mean",
+  time_trend = FALSE
+)
+```
+
+Looking only at the auto-correlation of self-doubt, we see that our method picks up quite a regular oscillating pattern. The grey vertical lines here represent 24 hour blocks, which coincide with small positive "peaks" of autocorrelation.
+
+```{r}
+plot(outemp$est$se_selfdoubtose_selfdoub, type = "l", ylab = "estimated autocorrelation", 
+     xlab = "time diff", main = "Autocorrelation Y1", col = "red", ylim = c(-.2,.5))
+lines(outemp$highCI$se_selfdoubtose_selfdoub, lty = 2, col = "red")
+lines(outemp$lowCI$se_selfdoubtose_selfdoub, lty = 2, col = "red")
+abline(v = (1:8)* 24, col = "grey")
+abline(h = 0, col = "gray", lty = 2)
+```
+
+We can also check whether the standard auto-correlation, which incorrectly assumes equal spacing between measurements, manages to pick up this pattern, using the `acf` function standard in R. As we can see below, although the ACF function picks up some signal (overall descending auto-correlations, perhaps a hint of possible oscillation), the pattern is much less clear, as we would expect.
+
+```{r}
+acf(data_long[,"se_selfdoub"], lag.max = maxtime,na.action = na.pass)
+```
+
+At this point, feel free to explore the empirical dataset above, or your own data, and see if you can find anything of interest!
+
+## Contact Details
+
+[**o.ryan\@uu.nl**](mailto:o.ryan@uu.nl){.email}
